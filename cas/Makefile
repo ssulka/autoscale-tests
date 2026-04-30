@@ -75,11 +75,11 @@ build-e2e:
 
 .PHONY: test-e2e
 test-e2e: ## Run all non-periodic tests
-	hack/ci-integration.sh $(GINKGO_ARGS) --label-filter='!periodic' -p
+	hack/ci-integration.sh $(GINKGO_FLAGS) --label-filter='!periodic' -p
 
 .PHONY: test-e2e-periodic
 test-e2e-periodic: ## Run all periodic tests
-	hack/ci-integration.sh $(GINKGO_ARGS) --label-filter='periodic' -p
+	hack/ci-integration.sh $(GINKGO_FLAGS) --label-filter='periodic' -p
 
 .PHONY: help
 help:
