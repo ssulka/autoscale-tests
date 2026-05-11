@@ -134,7 +134,8 @@ func (f *Framework) IsOperatorSubscribed(ctx context.Context, name, namespace st
 // Operator namespaces
 const (
 	VPANamespace      = "openshift-vertical-pod-autoscaler"
-	HPANamespace      = "openshift-machine-api"
+	HPANamespace      = "openshift-machine-api" // backward comp
+	CASNamespace      = "openshift-machine-api"
 	CRONamespace      = "clusterresourceoverride-operator"
 	CMANamespace      = "openshift-keda"
 	AutoNodeNamespace = "openshift-machine-api"
@@ -160,9 +161,9 @@ var Operators = map[string]OperatorInfo{
 		CatalogSource: "redhat-operators",
 		Channel:       "stable",
 	},
-	"hpa": {
+	"cas": {
 		Name:          "cluster-autoscaler-operator",
-		Namespace:     HPANamespace,
+		Namespace:     CASNamespace,
 		Labels:        map[string]string{"k8s-app": "cluster-autoscaler-operator"},
 		PackageName:   "cluster-autoscaler",
 		CatalogSource: "redhat-operators",
@@ -192,6 +193,22 @@ var Operators = map[string]OperatorInfo{
 		PackageName:   "", // Built-in
 		CatalogSource: "",
 		Channel:       "",
+	},
+	// KEDA sub-components installed by CMA operator
+	"keda-operator": {
+		Name:      "keda-operator",
+		Namespace: CMANamespace,
+		Labels:    map[string]string{"app": "keda-operator"},
+	},
+	"keda-metrics-apiserver": {
+		Name:      "keda-metrics-apiserver",
+		Namespace: CMANamespace,
+		Labels:    map[string]string{"app": "keda-metrics-apiserver"},
+	},
+	"keda-admission": {
+		Name:      "keda-admission-webhooks",
+		Namespace: CMANamespace,
+		Labels:    map[string]string{"app": "keda-admission-webhooks"},
 	},
 }
 

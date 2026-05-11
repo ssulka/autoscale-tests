@@ -6,7 +6,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func TestHpaInit(t *testing.T) {
+func TestHPA(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "HPA Init Test")
+	RunSpecs(t, "HPA E2E Test Suite")
 }

@@ -16,10 +16,12 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	rt "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -250,16 +252,28 @@ func (f *Framework) CleanupTestNamespace(ctx context.Context, name string) error
 
 // Deployment Helpers
 
-type DeploymentConfig struct {
+type ContainerConfig struct {
 	Name          string
-	Namespace     string
-	Replicas      int32
 	Image         string
+	Command       []string
 	CPURequest    string
 	MemoryRequest string
 	CPULimit      string
 	MemoryLimit   string
-	Labels        map[string]string
+}
+
+type DeploymentConfig struct {
+	Name              string
+	Namespace         string
+	Replicas          int32
+	Image             string
+	Command           []string
+	CPURequest        string
+	MemoryRequest     string
+	CPULimit          string
+	MemoryLimit       string
+	Labels            map[string]string
+	ExtraContainers   []ContainerConfig
 }
 
 func DefaultDeploymentConfig(name, namespace string) DeploymentConfig {
@@ -280,6 +294,39 @@ func (f *Framework) CreateDeployment(ctx context.Context, cfg DeploymentConfig) 
 	if cfg.Labels == nil {
 		cfg.Labels = map[string]string{"app": cfg.Name}
 	}
+	containers := []corev1.Container{{
+		Name:    "test-container",
+		Image:   cfg.Image,
+		Command: cfg.Command,
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse(cfg.CPURequest),
+				corev1.ResourceMemory: resource.MustParse(cfg.MemoryRequest),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse(cfg.CPULimit),
+				corev1.ResourceMemory: resource.MustParse(cfg.MemoryLimit),
+			},
+		},
+	}}
+	for _, ec := range cfg.ExtraContainers {
+		containers = append(containers, corev1.Container{
+			Name:    ec.Name,
+			Image:   ec.Image,
+			Command: ec.Command,
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse(ec.CPURequest),
+					corev1.ResourceMemory: resource.MustParse(ec.MemoryRequest),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse(ec.CPULimit),
+					corev1.ResourceMemory: resource.MustParse(ec.MemoryLimit),
+				},
+			},
+		})
+	}
+
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: cfg.Name, Namespace: cfg.Namespace, Labels: cfg.Labels},
 		Spec: appsv1.DeploymentSpec{
@@ -288,20 +335,7 @@ func (f *Framework) CreateDeployment(ctx context.Context, cfg DeploymentConfig) 
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: cfg.Labels},
 				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:  "test-container",
-						Image: cfg.Image,
-						Resources: corev1.ResourceRequirements{
-							Requests: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse(cfg.CPURequest),
-								corev1.ResourceMemory: resource.MustParse(cfg.MemoryRequest),
-							},
-							Limits: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse(cfg.CPULimit),
-								corev1.ResourceMemory: resource.MustParse(cfg.MemoryLimit),
-							},
-						},
-					}},
+					Containers: containers,
 				},
 			},
 		},
@@ -343,14 +377,22 @@ func (f *Framework) WaitForDeploymentReplicas(ctx context.Context, name, namespa
 // HPA Helpers
 
 type HPAConfig struct {
-	Name                 string
-	Namespace            string
-	TargetDeployment     string
-	MinReplicas          int32
-	MaxReplicas          int32
-	CPUTargetUtilization *int32
-	MemoryAverageValue   string
-	CPUAverageValue      string
+	Name                              string
+	Namespace                         string
+	TargetDeployment                  string
+	MinReplicas                       int32
+	MaxReplicas                       int32
+	CPUTargetUtilization              *int32
+	CPUAverageValue                   string
+	MemoryTargetUtilization           *int32
+	MemoryAverageValue                string
+	// ContainerResource metrics (targets a specific container by name)
+	ContainerName                     string
+	ContainerCPUTargetUtilization     *int32
+	ContainerCPUAverageValue          string
+	ContainerMemoryTargetUtilization  *int32
+	ContainerMemoryAverageValue       string
+	ScaleDownStabilizationWindowSecs  *int32
 }
 
 func DefaultHPAConfig(name, namespace, targetDeployment string) HPAConfig {
@@ -379,6 +421,21 @@ func (f *Framework) CreateHPA(ctx context.Context, cfg HPAConfig) (*autoscalingv
 			Metrics:     []autoscalingv2.MetricSpec{},
 		},
 	}
+	if cfg.ScaleDownStabilizationWindowSecs != nil {
+		periodSecs := int32(15)
+		hpa.Spec.Behavior = &autoscalingv2.HorizontalPodAutoscalerBehavior{
+			ScaleDown: &autoscalingv2.HPAScalingRules{
+				StabilizationWindowSeconds: cfg.ScaleDownStabilizationWindowSecs,
+				Policies: []autoscalingv2.HPAScalingPolicy{
+					{
+						Type:          autoscalingv2.PercentScalingPolicy,
+						Value:         100,
+						PeriodSeconds: periodSecs,
+					},
+				},
+			},
+		}
+	}
 
 	if cfg.CPUTargetUtilization != nil {
 		hpa.Spec.Metrics = append(hpa.Spec.Metrics, autoscalingv2.MetricSpec{
@@ -405,12 +462,83 @@ func (f *Framework) CreateHPA(ctx context.Context, cfg HPAConfig) (*autoscalingv
 			},
 		})
 	}
+	if cfg.MemoryTargetUtilization != nil {
+		hpa.Spec.Metrics = append(hpa.Spec.Metrics, autoscalingv2.MetricSpec{
+			Type: autoscalingv2.ResourceMetricSourceType,
+			Resource: &autoscalingv2.ResourceMetricSource{
+				Name: corev1.ResourceMemory,
+				Target: autoscalingv2.MetricTarget{
+					Type:               autoscalingv2.UtilizationMetricType,
+					AverageUtilization: cfg.MemoryTargetUtilization,
+				},
+			},
+		})
+	}
 	if cfg.MemoryAverageValue != "" {
 		q := resource.MustParse(cfg.MemoryAverageValue)
 		hpa.Spec.Metrics = append(hpa.Spec.Metrics, autoscalingv2.MetricSpec{
 			Type: autoscalingv2.ResourceMetricSourceType,
 			Resource: &autoscalingv2.ResourceMetricSource{
 				Name: corev1.ResourceMemory,
+				Target: autoscalingv2.MetricTarget{
+					Type:         autoscalingv2.AverageValueMetricType,
+					AverageValue: &q,
+				},
+			},
+		})
+	}
+
+	containerName := cfg.ContainerName
+	if containerName == "" {
+		containerName = "test-container"
+	}
+	if cfg.ContainerCPUTargetUtilization != nil {
+		hpa.Spec.Metrics = append(hpa.Spec.Metrics, autoscalingv2.MetricSpec{
+			Type: autoscalingv2.ContainerResourceMetricSourceType,
+			ContainerResource: &autoscalingv2.ContainerResourceMetricSource{
+				Name:      corev1.ResourceCPU,
+				Container: containerName,
+				Target: autoscalingv2.MetricTarget{
+					Type:               autoscalingv2.UtilizationMetricType,
+					AverageUtilization: cfg.ContainerCPUTargetUtilization,
+				},
+			},
+		})
+	}
+	if cfg.ContainerCPUAverageValue != "" {
+		q := resource.MustParse(cfg.ContainerCPUAverageValue)
+		hpa.Spec.Metrics = append(hpa.Spec.Metrics, autoscalingv2.MetricSpec{
+			Type: autoscalingv2.ContainerResourceMetricSourceType,
+			ContainerResource: &autoscalingv2.ContainerResourceMetricSource{
+				Name:      corev1.ResourceCPU,
+				Container: containerName,
+				Target: autoscalingv2.MetricTarget{
+					Type:         autoscalingv2.AverageValueMetricType,
+					AverageValue: &q,
+				},
+			},
+		})
+	}
+	if cfg.ContainerMemoryTargetUtilization != nil {
+		hpa.Spec.Metrics = append(hpa.Spec.Metrics, autoscalingv2.MetricSpec{
+			Type: autoscalingv2.ContainerResourceMetricSourceType,
+			ContainerResource: &autoscalingv2.ContainerResourceMetricSource{
+				Name:      corev1.ResourceMemory,
+				Container: containerName,
+				Target: autoscalingv2.MetricTarget{
+					Type:               autoscalingv2.UtilizationMetricType,
+					AverageUtilization: cfg.ContainerMemoryTargetUtilization,
+				},
+			},
+		})
+	}
+	if cfg.ContainerMemoryAverageValue != "" {
+		q := resource.MustParse(cfg.ContainerMemoryAverageValue)
+		hpa.Spec.Metrics = append(hpa.Spec.Metrics, autoscalingv2.MetricSpec{
+			Type: autoscalingv2.ContainerResourceMetricSourceType,
+			ContainerResource: &autoscalingv2.ContainerResourceMetricSource{
+				Name:      corev1.ResourceMemory,
+				Container: containerName,
 				Target: autoscalingv2.MetricTarget{
 					Type:         autoscalingv2.AverageValueMetricType,
 					AverageValue: &q,
@@ -451,6 +579,99 @@ func (f *Framework) WaitForHPAScaleDown(ctx context.Context, hpaName, namespace 
 		}
 		return hpa.Status.CurrentReplicas <= targetReplicas, nil
 	})
+}
+
+func (f *Framework) WaitForHPAReplicas(ctx context.Context, hpaName, namespace string, targetReplicas int32, timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(ctx, 20*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		hpa, err := f.GetHPA(ctx, hpaName, namespace)
+		if err != nil {
+			return false, nil
+		}
+		current := hpa.Status.CurrentReplicas
+		fmt.Printf("[HPA] %s: currentReplicas=%d, desiredReplicas=%d, target=%d\n",
+			hpaName, current, hpa.Status.DesiredReplicas, targetReplicas)
+		return current == targetReplicas, nil
+	})
+}
+
+func (f *Framework) WaitForHPAScaleAtLeast(ctx context.Context, hpaName, namespace string, minReplicas int32, timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(ctx, 20*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		hpa, err := f.GetHPA(ctx, hpaName, namespace)
+		if err != nil {
+			return false, nil
+		}
+		current := hpa.Status.CurrentReplicas
+		fmt.Printf("[HPA] %s: currentReplicas=%d, waiting for >=%d\n",
+			hpaName, current, minReplicas)
+		return current >= minReplicas, nil
+	})
+}
+
+func (f *Framework) WaitForHPAScaleAtMost(ctx context.Context, hpaName, namespace string, maxReplicas int32, timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(ctx, 20*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		hpa, err := f.GetHPA(ctx, hpaName, namespace)
+		if err != nil {
+			return false, nil
+		}
+		current := hpa.Status.CurrentReplicas
+		fmt.Printf("[HPA] %s: currentReplicas=%d, waiting for <=%d\n",
+			hpaName, current, maxReplicas)
+		return current <= maxReplicas, nil
+	})
+}
+
+func (f *Framework) EnsureHPAReplicasInRange(ctx context.Context, hpaName, namespace string, min, max int32, duration time.Duration) error {
+	// Wait for HPA to become active (CurrentReplicas > 0) before checking stability.
+	// HPA controller needs time to read metrics and set CurrentReplicas.
+	err := wait.PollUntilContextTimeout(ctx, 10*time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+		hpa, err := f.GetHPA(ctx, hpaName, namespace)
+		if err != nil {
+			return false, nil
+		}
+		if hpa.Status.CurrentReplicas > 0 {
+			fmt.Printf("[HPA] %s: became active with %d replicas\n", hpaName, hpa.Status.CurrentReplicas)
+			return true, nil
+		}
+		fmt.Printf("[HPA] %s: waiting for CurrentReplicas > 0 (currently %d)\n", hpaName, hpa.Status.CurrentReplicas)
+		return false, nil
+	})
+	if err != nil {
+		return fmt.Errorf("HPA %s never became active: %w", hpaName, err)
+	}
+
+	deadline := time.Now().Add(duration)
+	for time.Now().Before(deadline) {
+		hpa, err := f.GetHPA(ctx, hpaName, namespace)
+		if err != nil {
+			return fmt.Errorf("failed to get HPA %s: %w", hpaName, err)
+		}
+		current := hpa.Status.CurrentReplicas
+		if current < min || current > max {
+			return fmt.Errorf("HPA %s replicas %d out of range [%d, %d]", hpaName, current, min, max)
+		}
+		time.Sleep(10 * time.Second)
+	}
+	return nil
+}
+
+// Metrics API Helpers
+
+func (f *Framework) MetricsAPIAvailable(ctx context.Context) (bool, error) {
+	return f.CRDExists(ctx, "metrics.k8s.io", "PodMetrics")
+}
+
+// CRD Helpers
+
+func (f *Framework) CRDExists(ctx context.Context, group, kind string) (bool, error) {
+	mapper := f.Client.RESTMapper()
+	_, err := mapper.RESTMappings(schema.GroupKind{Group: group, Kind: kind})
+	if err != nil {
+		if meta.IsNoMatchError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // Templates

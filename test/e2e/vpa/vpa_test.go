@@ -10,17 +10,20 @@ import (
 )
 
 var f *framework.Framework
+var operatorInstalledByTest bool
 
 var _ = BeforeSuite(func() {
 	var err error
 	f, err = framework.NewFramework()
 	Expect(err).NotTo(HaveOccurred(), "Failed to create framework")
 
-	By("Checking if VPA operator is installed")
+	By("Checking if VPA operator is already installed")
 	installed, err := f.IsOperatorSubscribed(f.Ctx, "vertical-pod-autoscaler", framework.VPANamespace)
 	Expect(err).NotTo(HaveOccurred())
+	GinkgoWriter.Printf("[BeforeSuite] VPA already installed: %v\n", installed)
 
 	if !installed {
+		operatorInstalledByTest = true
 		By("Installing VPA operator from catalog")
 		err = f.InstallOperatorByKey(f.Ctx, "vpa")
 		Expect(err).NotTo(HaveOccurred(), "Failed to install VPA operator")
@@ -32,14 +35,18 @@ var _ = BeforeSuite(func() {
 		By("Waiting for VPA operator pods to be ready")
 		err = f.WaitForOperatorReady(f.Ctx, "vpa", 3*time.Minute)
 		Expect(err).NotTo(HaveOccurred(), "VPA operator pods did not become ready")
+		GinkgoWriter.Printf("[BeforeSuite] VPA operator installed and ready\n")
 	}
 })
 
 var _ = AfterSuite(func() {
-	if f != nil {
-		By("Uninstalling VPA operator")
+	if f != nil && operatorInstalledByTest {
+		By("Uninstalling VPA operator (installed by test)")
+		GinkgoWriter.Printf("[AfterSuite] Uninstalling VPA operator...\n")
 		err := f.UninstallOperatorByKey(f.Ctx, "vpa")
 		Expect(err).NotTo(HaveOccurred(), "Failed to uninstall VPA operator")
+	} else {
+		GinkgoWriter.Printf("[AfterSuite] Operator was pre-installed, skipping uninstall\n")
 	}
 })
 

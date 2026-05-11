@@ -10,17 +10,20 @@ import (
 )
 
 var f *framework.Framework
+var operatorInstalledByTest bool
 
 var _ = BeforeSuite(func() {
 	var err error
 	f, err = framework.NewFramework()
 	Expect(err).NotTo(HaveOccurred(), "Failed to create framework")
 
-	By("Checking if CRO operator is installed")
+	By("Checking if CRO operator is already installed")
 	installed, err := f.IsOperatorSubscribed(f.Ctx, "clusterresourceoverride", framework.CRONamespace)
 	Expect(err).NotTo(HaveOccurred())
+	GinkgoWriter.Printf("[BeforeSuite] CRO already installed: %v\n", installed)
 
 	if !installed {
+		operatorInstalledByTest = true
 		By("Installing CRO operator from catalog")
 		err = f.InstallOperatorByKey(f.Ctx, "cro")
 		Expect(err).NotTo(HaveOccurred(), "Failed to install CRO operator")
@@ -32,14 +35,18 @@ var _ = BeforeSuite(func() {
 		By("Waiting for CRO operator pods to be ready")
 		err = f.WaitForOperatorReady(f.Ctx, "cro", 3*time.Minute)
 		Expect(err).NotTo(HaveOccurred(), "CRO operator pods did not become ready")
+		GinkgoWriter.Printf("[BeforeSuite] CRO operator installed and ready\n")
 	}
 })
 
 var _ = AfterSuite(func() {
-	if f != nil {
-		By("Uninstalling CRO operator")
+	if f != nil && operatorInstalledByTest {
+		By("Uninstalling CRO operator (installed by test)")
+		GinkgoWriter.Printf("[AfterSuite] Uninstalling CRO operator...\n")
 		err := f.UninstallOperatorByKey(f.Ctx, "cro")
 		Expect(err).NotTo(HaveOccurred(), "Failed to uninstall CRO operator")
+	} else {
+		GinkgoWriter.Printf("[AfterSuite] Operator was pre-installed, skipping uninstall\n")
 	}
 })
 
