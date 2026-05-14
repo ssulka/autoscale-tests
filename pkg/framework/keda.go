@@ -19,7 +19,7 @@ var scaledObjectGVR = schema.GroupVersionResource{
 	Resource: "scaledobjects",
 }
 
-// ScaledObjectTrigger represents a single KEDA trigger (e.g. cpu, cron, memory).
+// ScaledObjectTrigger represents a single KEDA trigger
 type ScaledObjectTrigger struct {
 	Type       string            // e.g. "cpu", "cron", "memory"
 	MetricType string            // e.g. "Utilization", "AverageValue" (optional, used by cpu/memory)
@@ -198,6 +198,49 @@ func (f *Framework) EnsureDeploymentReplicasStable(ctx context.Context, deployme
 		time.Sleep(10 * time.Second)
 	}
 	return nil
+}
+
+// PauseScaledObject sets the KEDA pause annotation on a ScaledObject.
+// KEDA will stop scaling the target while paused.
+func (f *Framework) PauseScaledObject(ctx context.Context, name, namespace string, pausedReplicas int) error {
+	so, err := f.GetScaledObject(ctx, name, namespace)
+	if err != nil {
+		return fmt.Errorf("failed to get ScaledObject: %w", err)
+	}
+	annotations := so.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations["autoscaling.keda.sh/paused-replicas"] = fmt.Sprintf("%d", pausedReplicas)
+	so.SetAnnotations(annotations)
+	_, err = f.getDynamicClient().Resource(scaledObjectGVR).Namespace(namespace).Update(ctx, so, metav1.UpdateOptions{})
+	return err
+}
+
+// ResumeScaledObject removes the KEDA pause annotation from a ScaledObject
+func (f *Framework) ResumeScaledObject(ctx context.Context, name, namespace string) error {
+	so, err := f.GetScaledObject(ctx, name, namespace)
+	if err != nil {
+		return fmt.Errorf("failed to get ScaledObject: %w", err)
+	}
+	annotations := so.GetAnnotations()
+	delete(annotations, "autoscaling.keda.sh/paused-replicas")
+	so.SetAnnotations(annotations)
+	_, err = f.getDynamicClient().Resource(scaledObjectGVR).Namespace(namespace).Update(ctx, so, metav1.UpdateOptions{})
+	return err
+}
+
+// WaitForDeploymentReplicas waits until a deployment has exactly the specified number of ready replicas
+func (f *Framework) WaitForKEDAExactReplicas(ctx context.Context, deploymentName, namespace string, replicas int32, timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(ctx, 10*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		dep, err := f.GetDeployment(ctx, deploymentName, namespace)
+		if err != nil {
+			return false, nil
+		}
+		current := dep.Status.ReadyReplicas
+		fmt.Printf("[KEDA] %s: readyReplicas=%d, waiting for ==%d\n", deploymentName, current, replicas)
+		return current == replicas, nil
+	})
 }
 
 // getDynamicClient returns a dynamic Kubernetes client for working with unstructured resources.

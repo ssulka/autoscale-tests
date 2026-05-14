@@ -287,6 +287,230 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 		})
 	})
 
+	// ========================================================================
+	// Memory Scaler — scale out on memory utilization via ScaledObject
+	// Upstream: kedacore/keda/tests/scalers/memory
+	// ========================================================================
+	Context("Memory scaler", func() {
+
+		It("should scale out on high memory utilization and scale back in when load stops", func() {
+			var testNamespace string
+			By("Creating test namespace")
+			var err error
+			testNamespace, err = f.CreateTestNamespace(f.Ctx, "cma-mem")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				if testNamespace != "" {
+					_ = f.CleanupTestNamespace(f.Ctx, testNamespace)
+				}
+			})
+
+			deploymentName := "cma-mem-deploy"
+
+			By("Creating resource-consumer deployment with memory request")
+			rc, err := f.CreateResourceConsumer(f.Ctx, framework.ResourceConsumerConfig{
+				Name:         deploymentName,
+				Namespace:    testNamespace,
+				Replicas:     1,
+				CPURequest:   100,
+				MemRequest:   128,
+				InitCPUTotal: 0,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(rc.CleanUp)
+
+			soName := "cma-mem-so"
+			By("Creating ScaledObject with memory trigger (50% utilization)")
+			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
+				Name:           soName,
+				Namespace:      testNamespace,
+				DeploymentName: deploymentName,
+				MinReplicas:    int64Ptr(1),
+				MaxReplicas:    5,
+				ScaleDownStabilizationSeconds: int64Ptr(0),
+				CooldownPeriod:                int64Ptr(30),
+				Triggers: []framework.ScaledObjectTrigger{{
+					Type:       "memory",
+					MetricType: "Utilization",
+					Metadata: map[string]string{
+						"value": "50",
+					},
+				}},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = f.DeleteScaledObject(f.Ctx, soName, testNamespace)
+			})
+
+			By("Generating memory load (256MB, target is 50% of 128Mi = 64Mi per pod)")
+			rc.ConsumeMem(256)
+
+			By("Waiting for scale out to at least 2 replicas")
+			err = f.WaitForKEDAScaleUp(f.Ctx, deploymentName, testNamespace, 2, 5*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "Deployment should scale out under memory load")
+			dep, _ := f.GetDeployment(f.Ctx, deploymentName, testNamespace)
+			GinkgoWriter.Printf("[Test] Memory scale-out confirmed: %d ready replicas\n", dep.Status.ReadyReplicas)
+
+			By("Stopping memory load")
+			rc.ConsumeMem(0)
+
+			By("Waiting for scale in to 1 replica")
+			err = f.WaitForKEDAScaleDown(f.Ctx, deploymentName, testNamespace, 1, 5*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "Deployment should scale back to 1 after load stops")
+			GinkgoWriter.Printf("[Test] Memory scale-in confirmed\n")
+		})
+	})
+
+	// ========================================================================
+	// Scale to zero — KEDA's signature feature: minReplicas=0
+	// Upstream: kedacore/keda/tests/scalers/cron (with minReplicas=0)
+	// ========================================================================
+	Context("Scale to zero", func() {
+
+		It("should scale deployment to zero when no triggers are active", func() {
+			var testNamespace string
+			By("Creating test namespace")
+			var err error
+			testNamespace, err = f.CreateTestNamespace(f.Ctx, "cma-zero")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				if testNamespace != "" {
+					_ = f.CleanupTestNamespace(f.Ctx, testNamespace)
+				}
+			})
+
+			deploymentName := "cma-zero-deploy"
+
+			By("Creating a deployment with 1 replica")
+			cfg := framework.DefaultDeploymentConfig(deploymentName, testNamespace)
+			cfg.Replicas = 1
+			_, err = f.CreateDeployment(f.Ctx, cfg)
+			Expect(err).NotTo(HaveOccurred())
+			err = f.WaitForDeploymentReady(f.Ctx, deploymentName, testNamespace, 2*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Cron trigger with a window far in the future (hour 23, minute 59)
+			// so it's never active during the test → KEDA should scale to 0
+			soName := "cma-zero-so"
+			By("Creating ScaledObject with minReplicas=0 and inactive cron trigger")
+			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
+				Name:            soName,
+				Namespace:       testNamespace,
+				DeploymentName:  deploymentName,
+				MinReplicas:     int64Ptr(0),
+				MaxReplicas:     5,
+				PollingInterval: int64Ptr(5),
+				CooldownPeriod:  int64Ptr(5),
+				Triggers: []framework.ScaledObjectTrigger{{
+					Type: "cron",
+					Metadata: map[string]string{
+						"timezone":        "Etc/UTC",
+						"start":           "0 0 1 1 *",
+						"end":             "1 0 1 1 *",
+						"desiredReplicas": "3",
+					},
+				}},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = f.DeleteScaledObject(f.Ctx, soName, testNamespace)
+			})
+
+			By("Waiting for deployment to scale to 0 replicas")
+			err = f.WaitForKEDAScaleDown(f.Ctx, deploymentName, testNamespace, 0, 3*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "KEDA should scale deployment to 0 when no triggers are active")
+
+			dep, _ := f.GetDeployment(f.Ctx, deploymentName, testNamespace)
+			GinkgoWriter.Printf("[Test] Scale-to-zero confirmed: %d ready replicas\n", dep.Status.ReadyReplicas)
+			Expect(dep.Status.ReadyReplicas).To(Equal(int32(0)))
+		})
+	})
+
+	// ========================================================================
+	// Paused ScaledObject — KEDA respects the pause annotation
+	// Upstream: kedacore/keda/tests/internals/pause_scaledobject
+	// ========================================================================
+	Context("Paused ScaledObject", func() {
+
+		It("should hold replicas at paused count and resume scaling after unpause", func() {
+			var testNamespace string
+			By("Creating test namespace")
+			var err error
+			testNamespace, err = f.CreateTestNamespace(f.Ctx, "cma-pause")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				if testNamespace != "" {
+					_ = f.CleanupTestNamespace(f.Ctx, testNamespace)
+				}
+			})
+
+			deploymentName := "cma-pause-deploy"
+
+			By("Creating a deployment with 1 replica")
+			cfg := framework.DefaultDeploymentConfig(deploymentName, testNamespace)
+			cfg.Replicas = 1
+			_, err = f.CreateDeployment(f.Ctx, cfg)
+			Expect(err).NotTo(HaveOccurred())
+			err = f.WaitForDeploymentReady(f.Ctx, deploymentName, testNamespace, 2*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Active cron window: 0-59 every hour → always active → scales to 4
+			soName := "cma-pause-so"
+			By("Creating ScaledObject with always-active cron trigger (desiredReplicas=4)")
+			now := time.Now().UTC()
+			startMin := (now.Minute() + 1) % 60
+			endMin := (startMin + 3) % 60
+			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
+				Name:            soName,
+				Namespace:       testNamespace,
+				DeploymentName:  deploymentName,
+				MinReplicas:     int64Ptr(1),
+				MaxReplicas:     10,
+				PollingInterval: int64Ptr(5),
+				CooldownPeriod:  int64Ptr(5),
+				Triggers: []framework.ScaledObjectTrigger{{
+					Type: "cron",
+					Metadata: map[string]string{
+						"timezone":        "Etc/UTC",
+						"start":           fmt.Sprintf("%d * * * *", startMin),
+						"end":             fmt.Sprintf("%d * * * *", endMin),
+						"desiredReplicas": "4",
+					},
+				}},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = f.DeleteScaledObject(f.Ctx, soName, testNamespace)
+			})
+
+			By("Waiting for scale out to 4 replicas")
+			err = f.WaitForKEDAScaleUp(f.Ctx, deploymentName, testNamespace, 4, 3*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Pausing ScaledObject at 2 replicas")
+			err = f.PauseScaledObject(f.Ctx, soName, testNamespace, 2)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for deployment to settle at 2 replicas")
+			err = f.WaitForKEDAExactReplicas(f.Ctx, deploymentName, testNamespace, 2, 3*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "Paused ScaledObject should hold deployment at 2 replicas")
+			GinkgoWriter.Printf("[Test] Paused at 2 replicas confirmed\n")
+
+			By("Verifying replicas remain stable at 2")
+			err = f.EnsureDeploymentReplicasStable(f.Ctx, deploymentName, testNamespace, 2, 2, 30*time.Second)
+			Expect(err).NotTo(HaveOccurred(), "Replicas should stay at 2 while paused")
+
+			By("Resuming ScaledObject")
+			err = f.ResumeScaledObject(f.Ctx, soName, testNamespace)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for KEDA to scale back up to 4 replicas after resume")
+			err = f.WaitForKEDAScaleUp(f.Ctx, deploymentName, testNamespace, 4, 3*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "After resume, KEDA should scale back to desired replicas")
+			GinkgoWriter.Printf("[Test] Resume and scale-up to 4 confirmed\n")
+		})
+	})
+
 	// ScaledObject validation — KEDA admission webhook should reject invalid configs
 	Context("ScaledObject validation", func() {
 
