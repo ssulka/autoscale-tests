@@ -287,10 +287,7 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 		})
 	})
 
-	// ========================================================================
 	// Memory Scaler — scale out on memory utilization via ScaledObject
-	// Upstream: kedacore/keda/tests/scalers/memory
-	// ========================================================================
 	Context("Memory scaler", func() {
 
 		It("should scale out on high memory utilization and scale back in when load stops", func() {
@@ -361,10 +358,7 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 		})
 	})
 
-	// ========================================================================
 	// Scale to zero — KEDA's signature feature: minReplicas=0
-	// Upstream: kedacore/keda/tests/scalers/cron (with minReplicas=0)
-	// ========================================================================
 	Context("Scale to zero", func() {
 
 		It("should scale deployment to zero when no triggers are active", func() {
@@ -426,10 +420,7 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 		})
 	})
 
-	// ========================================================================
 	// Paused ScaledObject — KEDA respects the pause annotation
-	// Upstream: kedacore/keda/tests/internals/pause_scaledobject
-	// ========================================================================
 	Context("Paused ScaledObject", func() {
 
 		It("should hold replicas at paused count and resume scaling after unpause", func() {
