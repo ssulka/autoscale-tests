@@ -11,9 +11,9 @@
 OUT_DIR = _output
 OS_OUTPUT_GOPATH ?= 1
 
-GO111MODULE = off
+GO111MODULE = on
 export GO111MODULE
-GOFLAGS ?= -mod=vendor
+GOFLAGS ?=
 
 export GOFLAGS
 export TESTFLAGS
@@ -142,3 +142,31 @@ vet: ## Go fmt your code
 .PHONY: goimports
 goimports: ## Go fmt your code
 	hack/goimports.sh ./cluster-autoscaler/cloudprovider/clusterapi
+
+# E2E Tests
+# Use GINKGO_FLAGS to pass extra flags, e.g.: make test-e2e-hpa GINKGO_FLAGS="--label-filter=slow"
+GINKGO_FLAGS ?=
+
+.PHONY: test-e2e
+test-e2e: ## Run all E2E tests
+	go test -v -timeout 30m ./test/e2e/... -args -ginkgo.v $(GINKGO_FLAGS)
+
+.PHONY: test-e2e-vpa
+test-e2e-vpa: ## Run VPA E2E tests
+	go test -v -timeout 30m ./test/e2e/vpa/... -args -ginkgo.v $(GINKGO_FLAGS)
+
+.PHONY: test-e2e-hpa
+test-e2e-hpa: ## Run HPA E2E tests
+	go test -v -timeout 30m ./test/e2e/hpa/... -args -ginkgo.v $(GINKGO_FLAGS)
+
+.PHONY: test-e2e-cas
+test-e2e-cas: ## Run Cluster Autoscaler E2E tests
+	go test -v -timeout 30m ./test/e2e/cas/... -args -ginkgo.v $(GINKGO_FLAGS)
+
+.PHONY: test-e2e-cro
+test-e2e-cro: ## Run CRO E2E tests
+	go test -v -timeout 30m ./test/e2e/cro/... -args -ginkgo.v $(GINKGO_FLAGS)
+
+.PHONY: test-e2e-cma
+test-e2e-cma: ## Run CMA E2E tests
+	go test -v -timeout 30m ./test/e2e/cma/... -args -ginkgo.v $(GINKGO_FLAGS)
