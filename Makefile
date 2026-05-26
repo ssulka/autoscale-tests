@@ -170,7 +170,3 @@ test-e2e-cro: ## Run CRO E2E tests
 .PHONY: test-e2e-cma
 test-e2e-cma: ## Run CMA E2E tests
 	go test -v -timeout 30m ./test/e2e/cma/... -args -ginkgo.v $(GINKGO_FLAGS)
-
-.PHONY: test-e2e-autonode
-test-e2e-autonode: ## Run AutoNode E2E tests
-	go test -v -timeout 30m ./test/e2e/autonode/... -args -ginkgo.v $(GINKGO_FLAGS)
