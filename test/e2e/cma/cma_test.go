@@ -53,6 +53,8 @@ var _ = AfterSuite(func() {
 
 var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 
+	// Manual: oc get namespace openshift-keda
+	//         oc get pods -n openshift-keda
 	Context("Installation verification", func() {
 
 		It("should have the CMA namespace", func() {
@@ -80,6 +82,7 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 		})
 	})
 
+	// Manual: oc get pods -n openshift-keda | grep -E "keda-operator|keda-metrics|keda-admission"
 	Context("KEDA components verification", func() {
 
 		It("should have keda-operator pod running and ready", func() {
@@ -122,6 +125,7 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 		})
 	})
 
+	// Manual: oc get crd scaledobjects.keda.sh scaledjobs.keda.sh triggerauthentications.keda.sh
 	Context("KEDA CRD verification", func() {
 
 		It("should have ScaledObject CRD registered", func() {
@@ -149,6 +153,11 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 		})
 	})
 
+	// Manual: oc new-project cma-cron-test
+	//         oc create deployment test-app --image=registry.k8s.io/pause:3.9 --replicas=1
+	//         oc apply -f ScaledObject with cron trigger (start=NOW+1min, end=NOW+3min, desiredReplicas=4)
+	//         oc get deployment test-app -w  → expect 4 replicas during window, 1 after
+	//         oc delete project cma-cron-test
 	Context("Cron scaler", func() {
 
 		It("should scale out during a cron window and scale back in after", func() {
@@ -218,6 +227,16 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 	})
 
 	// CPU Scaler — scale out on CPU utilization via ScaledObject
+	// Manual: oc new-project cma-cpu-test
+	//         oc create deployment cma-cpu --image=registry.k8s.io/e2e-test-images/resource-consumer:1.13 --replicas=1
+	//         oc set resources deployment/cma-cpu --requests=cpu=200m,memory=64Mi
+	//         oc expose deployment/cma-cpu --port=8080
+	//         oc apply -f ScaledObject with cpu trigger (metricType=Utilization, value=50)
+	//         SVC_IP=$(oc get svc cma-cpu -o jsonpath='{.spec.clusterIP}')
+	//         oc run load --rm -i --restart=Never --image=curlimages/curl -- curl -X POST http://$SVC_IP:8080/ConsumeCPU -d "millicores=500&durationSec=300"
+	//         oc get hpa -w  → expect replicas > 1
+	//         After load ends → expect scale back to 1
+	//         oc delete project cma-cpu-test
 	Context("CPU scaler", func() {
 
 		It("should scale out on high CPU utilization and scale back in when load stops", func() {
@@ -255,6 +274,7 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 				MinReplicas:    int64Ptr(1),
 				MaxReplicas:    5,
 				ScaleDownStabilizationSeconds: int64Ptr(0),
+				CooldownPeriod:                int64Ptr(30),
 				Triggers: []framework.ScaledObjectTrigger{{
 					Type:       "cpu",
 					MetricType: "Utilization",
@@ -288,6 +308,16 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 	})
 
 	// Memory Scaler — scale out on memory utilization via ScaledObject
+	// Manual: oc new-project cma-mem-test
+	//         oc create deployment cma-mem --image=registry.k8s.io/e2e-test-images/resource-consumer:1.13 --replicas=1
+	//         oc set resources deployment/cma-mem --requests=cpu=100m,memory=128Mi
+	//         oc expose deployment/cma-mem --port=8080
+	//         oc apply -f ScaledObject with memory trigger (metricType=Utilization, value=50)
+	//         SVC_IP=$(oc get svc cma-mem -o jsonpath='{.spec.clusterIP}')
+	//         oc run load --rm -i --restart=Never --image=curlimages/curl -- curl -X POST http://$SVC_IP:8080/ConsumeMem -d "megabytes=256&durationSec=300"
+	//         oc get hpa -w  → expect replicas > 1
+	//         After load ends → expect scale back to 1
+	//         oc delete project cma-mem-test
 	Context("Memory scaler", func() {
 
 		It("should scale out on high memory utilization and scale back in when load stops", func() {
@@ -359,6 +389,11 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 	})
 
 	// Scale to zero — KEDA's signature feature: minReplicas=0
+	// Manual: oc new-project cma-zero-test
+	//         oc create deployment test-app --image=registry.k8s.io/pause:3.9 --replicas=1
+	//         oc apply -f ScaledObject with minReplicaCount=0 and inactive cron trigger (e.g. Jan 1st)
+	//         oc get deployment test-app -w  → expect 0 replicas
+	//         oc delete project cma-zero-test
 	Context("Scale to zero", func() {
 
 		It("should scale deployment to zero when no triggers are active", func() {
@@ -421,6 +456,14 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 	})
 
 	// Paused ScaledObject — KEDA respects the pause annotation
+	// Manual: oc new-project cma-pause-test
+	//         oc create deployment test-app --image=registry.k8s.io/pause:3.9 --replicas=1
+	//         oc apply -f ScaledObject with active cron trigger (desiredReplicas=4)
+	//         Wait for 4 replicas, then: oc annotate scaledobject <name> autoscaling.keda.sh/paused-replicas="2"
+	//         oc get deployment test-app -w  → expect 2 replicas (held)
+	//         oc annotate scaledobject <name> autoscaling.keda.sh/paused-replicas-  (remove annotation)
+	//         → expect scale back to 4
+	//         oc delete project cma-pause-test
 	Context("Paused ScaledObject", func() {
 
 		It("should hold replicas at paused count and resume scaling after unpause", func() {
@@ -503,6 +546,9 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 	})
 
 	// ScaledObject validation — KEDA admission webhook should reject invalid configs
+	// Manual: Create deployment + ScaledObject, then try creating a second ScaledObject targeting
+	//         the same deployment → expect admission webhook rejection.
+	//         Create deployment without CPU requests, try ScaledObject with cpu trigger → expect rejection.
 	Context("ScaledObject validation", func() {
 
 		It("should reject a second ScaledObject targeting the same deployment", func() {
