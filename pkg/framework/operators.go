@@ -21,13 +21,14 @@ type OperatorInstallOptions struct {
 	CatalogSourceNS     string
 	StartingCSV         string
 	InstallPlanApproval string
+	AllNamespaces       bool // Use all-namespaces OperatorGroup
 }
 
 func (f *Framework) InstallOperator(ctx context.Context, opts OperatorInstallOptions) error {
 	if _, err := f.CreateNamespace(ctx, opts.Namespace); err != nil {
 		return fmt.Errorf("failed to create namespace: %w", err)
 	}
-	if err := f.ensureOperatorGroup(ctx, opts.Namespace); err != nil {
+	if err := f.ensureOperatorGroupWithMode(ctx, opts.Namespace, opts.AllNamespaces); err != nil {
 		return fmt.Errorf("failed to create operator group: %w", err)
 	}
 
@@ -55,20 +56,48 @@ func (f *Framework) InstallOperator(ctx context.Context, opts OperatorInstallOpt
 }
 
 func (f *Framework) ensureOperatorGroup(ctx context.Context, namespace string) error {
+	return f.ensureOperatorGroupWithMode(ctx, namespace, false)
+}
+
+// ensureOperatorGroupAllNamespaces creates an OperatorGroup that watches all namespaces
+func (f *Framework) ensureOperatorGroupAllNamespaces(ctx context.Context, namespace string) error {
+	return f.ensureOperatorGroupWithMode(ctx, namespace, true)
+}
+
+func (f *Framework) ensureOperatorGroupWithMode(ctx context.Context, namespace string, allNamespaces bool) error {
 	ogList := &unstructured.UnstructuredList{}
 	ogList.SetGroupVersionKind(schema.GroupVersionKind{Group: "operators.coreos.com", Version: "v1", Kind: "OperatorGroupList"})
 	if err := f.Client.List(ctx, ogList, client.InNamespace(namespace)); err != nil {
 		return err
 	}
-	if len(ogList.Items) > 0 {
-		return nil
+
+	// Delete any existing OperatorGroups that don't match the desired mode
+	for i := range ogList.Items {
+		existing := &ogList.Items[i]
+		targets, _, _ := unstructured.NestedStringSlice(existing.Object, "spec", "targetNamespaces")
+		existingIsAllNS := len(targets) == 0
+		if existingIsAllNS != allNamespaces {
+			fmt.Printf("[Operator] Deleting stale OperatorGroup %s (allNamespaces=%v, want=%v)\n",
+				existing.GetName(), existingIsAllNS, allNamespaces)
+			if err := f.Client.Delete(ctx, existing); err != nil {
+				return fmt.Errorf("failed to delete stale OperatorGroup: %w", err)
+			}
+		} else {
+			return nil
+		}
 	}
+
+	spec := map[string]interface{}{}
+	if !allNamespaces {
+		spec["targetNamespaces"] = []interface{}{namespace}
+	}
+
 	og := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "operators.coreos.com/v1",
 			"kind":       "OperatorGroup",
 			"metadata":   map[string]interface{}{"name": namespace + "-og", "namespace": namespace},
-			"spec":       map[string]interface{}{"targetNamespaces": []interface{}{namespace}},
+			"spec":       spec,
 		},
 	}
 	return f.Client.Create(ctx, og)
@@ -143,13 +172,14 @@ const (
 
 // OperatorInfo contains information about an operator
 type OperatorInfo struct {
-	Name           string
-	Namespace      string            // Namespace where subscription is created
-	PodsNamespace  string            // Namespace where operator pods run (if different)
-	Labels         map[string]string
-	PackageName    string // OLM package name for installation
-	CatalogSource  string // Catalog source (e.g., "redhat-operators")
-	Channel        string // Channel (e.g., "stable")
+	Name            string
+	Namespace       string            // Namespace where subscription is created
+	PodsNamespace   string            // Namespace where operator pods run (if different)
+	Labels          map[string]string
+	PackageName     string // OLM package name for installation
+	CatalogSource   string // Catalog source (e.g., "redhat-operators")
+	Channel         string // Channel (e.g., "stable")
+	AllNamespaces   bool   // If true, OperatorGroup watches all namespaces
 }
 
 var Operators = map[string]OperatorInfo{
@@ -172,7 +202,7 @@ var Operators = map[string]OperatorInfo{
 	"cro": {
 		Name:          "clusterresourceoverride-operator",
 		Namespace:     CRONamespace,
-		Labels:        map[string]string{"app": "clusterresourceoverride-operator"},
+		Labels:        map[string]string{"clusterresourceoverride.operator": "true"},
 		PackageName:   "clusterresourceoverride",
 		CatalogSource: "redhat-operators",
 		Channel:       "stable",
@@ -186,14 +216,7 @@ var Operators = map[string]OperatorInfo{
 		CatalogSource: "redhat-operators",
 		Channel:       "stable",
 	},
-	"autonode": {
-		Name:          "machine-api-operator",
-		Namespace:     AutoNodeNamespace,
-		Labels:        map[string]string{"api": "clusterapi", "k8s-app": "controller"},
-		PackageName:   "", // Built-in
-		CatalogSource: "",
-		Channel:       "",
-	},
+
 	// KEDA sub-components installed by CMA operator
 	"keda-operator": {
 		Name:      "keda-operator",
@@ -299,12 +322,13 @@ func (f *Framework) InstallOperatorByKey(ctx context.Context, operatorKey string
 	}
 
 	opts := OperatorInstallOptions{
-		Name:            op.PackageName,
-		Namespace:       op.Namespace,
-		Channel:         op.Channel,
-		CatalogSource:   op.CatalogSource,
-		CatalogSourceNS: "openshift-marketplace",
+		Name:                op.PackageName,
+		Namespace:           op.Namespace,
+		Channel:             op.Channel,
+		CatalogSource:       op.CatalogSource,
+		CatalogSourceNS:     "openshift-marketplace",
 		InstallPlanApproval: "Automatic",
+		AllNamespaces:       op.AllNamespaces,
 	}
 
 	return f.InstallOperator(ctx, opts)
