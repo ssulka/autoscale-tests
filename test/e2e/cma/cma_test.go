@@ -1,6 +1,7 @@
 package cma
 
 import (
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -52,6 +53,8 @@ var _ = AfterSuite(func() {
 
 var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 
+	// Manual: oc get namespace openshift-keda
+	//         oc get pods -n openshift-keda
 	Context("Installation verification", func() {
 
 		It("should have the CMA namespace", func() {
@@ -79,6 +82,7 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 		})
 	})
 
+	// Manual: oc get pods -n openshift-keda | grep -E "keda-operator|keda-metrics|keda-admission"
 	Context("KEDA components verification", func() {
 
 		It("should have keda-operator pod running and ready", func() {
@@ -121,6 +125,7 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 		})
 	})
 
+	// Manual: oc get crd scaledobjects.keda.sh scaledjobs.keda.sh triggerauthentications.keda.sh
 	Context("KEDA CRD verification", func() {
 
 		It("should have ScaledObject CRD registered", func() {
@@ -147,4 +152,511 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 			GinkgoWriter.Printf("[Test] TriggerAuthentication CRD exists: %v\n", exists)
 		})
 	})
+
+	// Manual: oc new-project cma-cron-test
+	//         oc create deployment test-app --image=registry.k8s.io/pause:3.9 --replicas=1
+	//         oc apply -f ScaledObject with cron trigger (start=NOW+1min, end=NOW+3min, desiredReplicas=4)
+	//         oc get deployment test-app -w  → expect 4 replicas during window, 1 after
+	//         oc delete project cma-cron-test
+	Context("Cron scaler", func() {
+
+		It("should scale out during a cron window and scale back in after", func() {
+			var testNamespace string
+			By("Creating test namespace")
+			var err error
+			testNamespace, err = f.CreateTestNamespace(f.Ctx, "cma-cron")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				if testNamespace != "" {
+					_ = f.CleanupTestNamespace(f.Ctx, testNamespace)
+				}
+			})
+
+			deploymentName := "cma-cron-deploy"
+
+			By("Creating a simple deployment with 1 replica")
+			cfg := framework.DefaultDeploymentConfig(deploymentName, testNamespace)
+			cfg.Replicas = 1
+			_, err = f.CreateDeployment(f.Ctx, cfg)
+			Expect(err).NotTo(HaveOccurred())
+			err = f.WaitForDeploymentReady(f.Ctx, deploymentName, testNamespace, 2*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Build cron window: starts 1 minute from now, ends 2 minutes from now.
+			// This gives KEDA enough time to detect the trigger and scale out.
+			now := time.Now().UTC()
+			startMin := (now.Minute() + 1) % 60
+			endMin := (startMin + 2) % 60
+
+			By(fmt.Sprintf("Creating ScaledObject with cron trigger (start=%d, end=%d UTC minutes)", startMin, endMin))
+			soName := "cma-cron-so"
+			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
+				Name:           soName,
+				Namespace:      testNamespace,
+				DeploymentName: deploymentName,
+				MinReplicas:    int64Ptr(1),
+				MaxReplicas:    10,
+				PollingInterval: int64Ptr(5),
+				CooldownPeriod:  int64Ptr(5),
+				ScaleDownStabilizationSeconds: int64Ptr(15),
+				Triggers: []framework.ScaledObjectTrigger{{
+					Type: "cron",
+					Metadata: map[string]string{
+						"timezone":        "Etc/UTC",
+						"start":           fmt.Sprintf("%d * * * *", startMin),
+						"end":             fmt.Sprintf("%d * * * *", endMin),
+						"desiredReplicas": "4",
+					},
+				}},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = f.DeleteScaledObject(f.Ctx, soName, testNamespace)
+			})
+
+			By("Waiting for scale out to 4 replicas")
+			err = f.WaitForKEDAScaleUp(f.Ctx, deploymentName, testNamespace, 4, 3*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "Deployment should scale to 4 replicas during cron window")
+			GinkgoWriter.Printf("[Test] Cron scale-out confirmed: deployment at >= 4 replicas\n")
+
+			By("Waiting for scale in back to 1 replica after cron window ends")
+			err = f.WaitForKEDAScaleDown(f.Ctx, deploymentName, testNamespace, 1, 5*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "Deployment should scale back to 1 replica after cron window")
+			GinkgoWriter.Printf("[Test] Cron scale-in confirmed: deployment at <= 1 replicas\n")
+		})
+	})
+
+	// CPU Scaler — scale out on CPU utilization via ScaledObject
+	// Manual: oc new-project cma-cpu-test
+	//         oc create deployment cma-cpu --image=registry.k8s.io/e2e-test-images/resource-consumer:1.13 --replicas=1
+	//         oc set resources deployment/cma-cpu --requests=cpu=200m,memory=64Mi
+	//         oc expose deployment/cma-cpu --port=8080
+	//         oc apply -f ScaledObject with cpu trigger (metricType=Utilization, value=50)
+	//         SVC_IP=$(oc get svc cma-cpu -o jsonpath='{.spec.clusterIP}')
+	//         oc run load --rm -i --restart=Never --image=curlimages/curl -- curl -X POST http://$SVC_IP:8080/ConsumeCPU -d "millicores=500&durationSec=300"
+	//         oc get hpa -w  → expect replicas > 1
+	//         After load ends → expect scale back to 1
+	//         oc delete project cma-cpu-test
+	Context("CPU scaler", func() {
+
+		It("should scale out on high CPU utilization and scale back in when load stops", func() {
+			var testNamespace string
+			By("Creating test namespace")
+			var err error
+			testNamespace, err = f.CreateTestNamespace(f.Ctx, "cma-cpu")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				if testNamespace != "" {
+					_ = f.CleanupTestNamespace(f.Ctx, testNamespace)
+				}
+			})
+
+			deploymentName := "cma-cpu-deploy"
+
+			By("Creating resource-consumer deployment")
+			rc, err := f.CreateResourceConsumer(f.Ctx, framework.ResourceConsumerConfig{
+				Name:         deploymentName,
+				Namespace:    testNamespace,
+				Replicas:     1,
+				CPURequest:   200,
+				MemRequest:   64,
+				InitCPUTotal: 0,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(rc.CleanUp)
+
+			soName := "cma-cpu-so"
+			By("Creating ScaledObject with CPU trigger (50% utilization)")
+			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
+				Name:           soName,
+				Namespace:      testNamespace,
+				DeploymentName: deploymentName,
+				MinReplicas:    int64Ptr(1),
+				MaxReplicas:    5,
+				ScaleDownStabilizationSeconds: int64Ptr(0),
+				CooldownPeriod:                int64Ptr(30),
+				Triggers: []framework.ScaledObjectTrigger{{
+					Type:       "cpu",
+					MetricType: "Utilization",
+					Metadata: map[string]string{
+						"value": "50",
+					},
+				}},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = f.DeleteScaledObject(f.Ctx, soName, testNamespace)
+			})
+
+			By("Generating CPU load (500m across all pods, target is 50% of 200m = 100m)")
+			rc.ConsumeCPU(500)
+
+			By("Waiting for scale out to at least 2 replicas")
+			err = f.WaitForKEDAScaleUp(f.Ctx, deploymentName, testNamespace, 2, 5*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "Deployment should scale out under CPU load")
+			dep, _ := f.GetDeployment(f.Ctx, deploymentName, testNamespace)
+			GinkgoWriter.Printf("[Test] CPU scale-out confirmed: %d ready replicas\n", dep.Status.ReadyReplicas)
+
+			By("Stopping CPU load")
+			rc.ConsumeCPU(0)
+
+			By("Waiting for scale in to 1 replica")
+			err = f.WaitForKEDAScaleDown(f.Ctx, deploymentName, testNamespace, 1, 5*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "Deployment should scale back to 1 after load stops")
+			GinkgoWriter.Printf("[Test] CPU scale-in confirmed\n")
+		})
+	})
+
+	// Memory Scaler — scale out on memory utilization via ScaledObject
+	// Manual: oc new-project cma-mem-test
+	//         oc create deployment cma-mem --image=registry.k8s.io/e2e-test-images/resource-consumer:1.13 --replicas=1
+	//         oc set resources deployment/cma-mem --requests=cpu=100m,memory=128Mi
+	//         oc expose deployment/cma-mem --port=8080
+	//         oc apply -f ScaledObject with memory trigger (metricType=Utilization, value=50)
+	//         SVC_IP=$(oc get svc cma-mem -o jsonpath='{.spec.clusterIP}')
+	//         oc run load --rm -i --restart=Never --image=curlimages/curl -- curl -X POST http://$SVC_IP:8080/ConsumeMem -d "megabytes=256&durationSec=300"
+	//         oc get hpa -w  → expect replicas > 1
+	//         After load ends → expect scale back to 1
+	//         oc delete project cma-mem-test
+	Context("Memory scaler", func() {
+
+		It("should scale out on high memory utilization and scale back in when load stops", func() {
+			var testNamespace string
+			By("Creating test namespace")
+			var err error
+			testNamespace, err = f.CreateTestNamespace(f.Ctx, "cma-mem")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				if testNamespace != "" {
+					_ = f.CleanupTestNamespace(f.Ctx, testNamespace)
+				}
+			})
+
+			deploymentName := "cma-mem-deploy"
+
+			By("Creating resource-consumer deployment with memory request")
+			rc, err := f.CreateResourceConsumer(f.Ctx, framework.ResourceConsumerConfig{
+				Name:         deploymentName,
+				Namespace:    testNamespace,
+				Replicas:     1,
+				CPURequest:   100,
+				MemRequest:   128,
+				InitCPUTotal: 0,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(rc.CleanUp)
+
+			soName := "cma-mem-so"
+			By("Creating ScaledObject with memory trigger (50% utilization)")
+			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
+				Name:           soName,
+				Namespace:      testNamespace,
+				DeploymentName: deploymentName,
+				MinReplicas:    int64Ptr(1),
+				MaxReplicas:    5,
+				ScaleDownStabilizationSeconds: int64Ptr(0),
+				CooldownPeriod:                int64Ptr(30),
+				Triggers: []framework.ScaledObjectTrigger{{
+					Type:       "memory",
+					MetricType: "Utilization",
+					Metadata: map[string]string{
+						"value": "50",
+					},
+				}},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = f.DeleteScaledObject(f.Ctx, soName, testNamespace)
+			})
+
+			By("Generating memory load (256MB, target is 50% of 128Mi = 64Mi per pod)")
+			rc.ConsumeMem(256)
+
+			By("Waiting for scale out to at least 2 replicas")
+			err = f.WaitForKEDAScaleUp(f.Ctx, deploymentName, testNamespace, 2, 5*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "Deployment should scale out under memory load")
+			dep, _ := f.GetDeployment(f.Ctx, deploymentName, testNamespace)
+			GinkgoWriter.Printf("[Test] Memory scale-out confirmed: %d ready replicas\n", dep.Status.ReadyReplicas)
+
+			By("Stopping memory load")
+			rc.ConsumeMem(0)
+
+			By("Waiting for scale in to 1 replica")
+			err = f.WaitForKEDAScaleDown(f.Ctx, deploymentName, testNamespace, 1, 5*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "Deployment should scale back to 1 after load stops")
+			GinkgoWriter.Printf("[Test] Memory scale-in confirmed\n")
+		})
+	})
+
+	// Scale to zero — KEDA's signature feature: minReplicas=0
+	// Manual: oc new-project cma-zero-test
+	//         oc create deployment test-app --image=registry.k8s.io/pause:3.9 --replicas=1
+	//         oc apply -f ScaledObject with minReplicaCount=0 and inactive cron trigger (e.g. Jan 1st)
+	//         oc get deployment test-app -w  → expect 0 replicas
+	//         oc delete project cma-zero-test
+	Context("Scale to zero", func() {
+
+		It("should scale deployment to zero when no triggers are active", func() {
+			var testNamespace string
+			By("Creating test namespace")
+			var err error
+			testNamespace, err = f.CreateTestNamespace(f.Ctx, "cma-zero")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				if testNamespace != "" {
+					_ = f.CleanupTestNamespace(f.Ctx, testNamespace)
+				}
+			})
+
+			deploymentName := "cma-zero-deploy"
+
+			By("Creating a deployment with 1 replica")
+			cfg := framework.DefaultDeploymentConfig(deploymentName, testNamespace)
+			cfg.Replicas = 1
+			_, err = f.CreateDeployment(f.Ctx, cfg)
+			Expect(err).NotTo(HaveOccurred())
+			err = f.WaitForDeploymentReady(f.Ctx, deploymentName, testNamespace, 2*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Cron trigger with a window far in the future (hour 23, minute 59)
+			// so it's never active during the test → KEDA should scale to 0
+			soName := "cma-zero-so"
+			By("Creating ScaledObject with minReplicas=0 and inactive cron trigger")
+			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
+				Name:            soName,
+				Namespace:       testNamespace,
+				DeploymentName:  deploymentName,
+				MinReplicas:     int64Ptr(0),
+				MaxReplicas:     5,
+				PollingInterval: int64Ptr(5),
+				CooldownPeriod:  int64Ptr(5),
+				Triggers: []framework.ScaledObjectTrigger{{
+					Type: "cron",
+					Metadata: map[string]string{
+						"timezone":        "Etc/UTC",
+						"start":           "0 0 1 1 *",
+						"end":             "1 0 1 1 *",
+						"desiredReplicas": "3",
+					},
+				}},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = f.DeleteScaledObject(f.Ctx, soName, testNamespace)
+			})
+
+			By("Waiting for deployment to scale to 0 replicas")
+			err = f.WaitForKEDAScaleDown(f.Ctx, deploymentName, testNamespace, 0, 3*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "KEDA should scale deployment to 0 when no triggers are active")
+
+			dep, _ := f.GetDeployment(f.Ctx, deploymentName, testNamespace)
+			GinkgoWriter.Printf("[Test] Scale-to-zero confirmed: %d ready replicas\n", dep.Status.ReadyReplicas)
+			Expect(dep.Status.ReadyReplicas).To(Equal(int32(0)))
+		})
+	})
+
+	// Paused ScaledObject — KEDA respects the pause annotation
+	// Manual: oc new-project cma-pause-test
+	//         oc create deployment test-app --image=registry.k8s.io/pause:3.9 --replicas=1
+	//         oc apply -f ScaledObject with active cron trigger (desiredReplicas=4)
+	//         Wait for 4 replicas, then: oc annotate scaledobject <name> autoscaling.keda.sh/paused-replicas="2"
+	//         oc get deployment test-app -w  → expect 2 replicas (held)
+	//         oc annotate scaledobject <name> autoscaling.keda.sh/paused-replicas-  (remove annotation)
+	//         → expect scale back to 4
+	//         oc delete project cma-pause-test
+	Context("Paused ScaledObject", func() {
+
+		It("should hold replicas at paused count and resume scaling after unpause", func() {
+			var testNamespace string
+			By("Creating test namespace")
+			var err error
+			testNamespace, err = f.CreateTestNamespace(f.Ctx, "cma-pause")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				if testNamespace != "" {
+					_ = f.CleanupTestNamespace(f.Ctx, testNamespace)
+				}
+			})
+
+			deploymentName := "cma-pause-deploy"
+
+			By("Creating a deployment with 1 replica")
+			cfg := framework.DefaultDeploymentConfig(deploymentName, testNamespace)
+			cfg.Replicas = 1
+			_, err = f.CreateDeployment(f.Ctx, cfg)
+			Expect(err).NotTo(HaveOccurred())
+			err = f.WaitForDeploymentReady(f.Ctx, deploymentName, testNamespace, 2*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Active cron window: 0-59 every hour → always active → scales to 4
+			soName := "cma-pause-so"
+			By("Creating ScaledObject with always-active cron trigger (desiredReplicas=4)")
+			now := time.Now().UTC()
+			startMin := (now.Minute() + 1) % 60
+			endMin := (startMin + 3) % 60
+			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
+				Name:            soName,
+				Namespace:       testNamespace,
+				DeploymentName:  deploymentName,
+				MinReplicas:     int64Ptr(1),
+				MaxReplicas:     10,
+				PollingInterval: int64Ptr(5),
+				CooldownPeriod:  int64Ptr(5),
+				Triggers: []framework.ScaledObjectTrigger{{
+					Type: "cron",
+					Metadata: map[string]string{
+						"timezone":        "Etc/UTC",
+						"start":           fmt.Sprintf("%d * * * *", startMin),
+						"end":             fmt.Sprintf("%d * * * *", endMin),
+						"desiredReplicas": "4",
+					},
+				}},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = f.DeleteScaledObject(f.Ctx, soName, testNamespace)
+			})
+
+			By("Waiting for scale out to 4 replicas")
+			err = f.WaitForKEDAScaleUp(f.Ctx, deploymentName, testNamespace, 4, 3*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Pausing ScaledObject at 2 replicas")
+			err = f.PauseScaledObject(f.Ctx, soName, testNamespace, 2)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for deployment to settle at 2 replicas")
+			err = f.WaitForKEDAExactReplicas(f.Ctx, deploymentName, testNamespace, 2, 3*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "Paused ScaledObject should hold deployment at 2 replicas")
+			GinkgoWriter.Printf("[Test] Paused at 2 replicas confirmed\n")
+
+			By("Verifying replicas remain stable at 2")
+			err = f.EnsureDeploymentReplicasStable(f.Ctx, deploymentName, testNamespace, 2, 2, 30*time.Second)
+			Expect(err).NotTo(HaveOccurred(), "Replicas should stay at 2 while paused")
+
+			By("Resuming ScaledObject")
+			err = f.ResumeScaledObject(f.Ctx, soName, testNamespace)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for KEDA to scale back up to 4 replicas after resume")
+			err = f.WaitForKEDAScaleUp(f.Ctx, deploymentName, testNamespace, 4, 3*time.Minute)
+			Expect(err).NotTo(HaveOccurred(), "After resume, KEDA should scale back to desired replicas")
+			GinkgoWriter.Printf("[Test] Resume and scale-up to 4 confirmed\n")
+		})
+	})
+
+	// ScaledObject validation — KEDA admission webhook should reject invalid configs
+	// Manual: Create deployment + ScaledObject, then try creating a second ScaledObject targeting
+	//         the same deployment → expect admission webhook rejection.
+	//         Create deployment without CPU requests, try ScaledObject with cpu trigger → expect rejection.
+	Context("ScaledObject validation", func() {
+
+		It("should reject a second ScaledObject targeting the same deployment", func() {
+			var testNamespace string
+			By("Creating test namespace")
+			var err error
+			testNamespace, err = f.CreateTestNamespace(f.Ctx, "cma-validate")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				if testNamespace != "" {
+					_ = f.CleanupTestNamespace(f.Ctx, testNamespace)
+				}
+			})
+
+			deploymentName := "cma-val-deploy"
+			By("Creating a deployment")
+			cfg := framework.DefaultDeploymentConfig(deploymentName, testNamespace)
+			_, err = f.CreateDeployment(f.Ctx, cfg)
+			Expect(err).NotTo(HaveOccurred())
+			err = f.WaitForDeploymentReady(f.Ctx, deploymentName, testNamespace, 2*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			so1Name := "cma-val-so1"
+			By("Creating first ScaledObject")
+			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
+				Name:           so1Name,
+				Namespace:      testNamespace,
+				DeploymentName: deploymentName,
+				MaxReplicas:    5,
+				Triggers: []framework.ScaledObjectTrigger{{
+					Type: "cron",
+					Metadata: map[string]string{
+						"timezone":        "Etc/UTC",
+						"start":           "0 * * * *",
+						"end":             "1 * * * *",
+						"desiredReplicas": "1",
+					},
+				}},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_ = f.DeleteScaledObject(f.Ctx, so1Name, testNamespace)
+			})
+
+			so2Name := "cma-val-so2"
+			By("Creating second ScaledObject targeting the same deployment — should be rejected")
+			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
+				Name:           so2Name,
+				Namespace:      testNamespace,
+				DeploymentName: deploymentName,
+				MaxReplicas:    5,
+				Triggers: []framework.ScaledObjectTrigger{{
+					Type: "cron",
+					Metadata: map[string]string{
+						"timezone":        "Etc/UTC",
+						"start":           "0 * * * *",
+						"end":             "1 * * * *",
+						"desiredReplicas": "1",
+					},
+				}},
+			})
+			Expect(err).To(HaveOccurred(), "Second ScaledObject targeting same deployment should be rejected")
+			GinkgoWriter.Printf("[Test] Correctly rejected duplicate ScaledObject: %v\n", err)
+		})
+
+		It("should reject a ScaledObject with CPU trigger when deployment has no CPU requests", func() {
+			var testNamespace string
+			By("Creating test namespace")
+			var err error
+			testNamespace, err = f.CreateTestNamespace(f.Ctx, "cma-val-cpu")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				if testNamespace != "" {
+					_ = f.CleanupTestNamespace(f.Ctx, testNamespace)
+				}
+			})
+
+			deploymentName := "cma-nocpu-deploy"
+			By("Creating a deployment without CPU requests")
+			cfg := framework.DefaultDeploymentConfig(deploymentName, testNamespace)
+			cfg.CPURequest = "0"
+			cfg.CPULimit = "0"
+			cfg.MemoryRequest = "64Mi"
+			cfg.MemoryLimit = "128Mi"
+			_, err = f.CreateDeployment(f.Ctx, cfg)
+			Expect(err).NotTo(HaveOccurred())
+			err = f.WaitForDeploymentReady(f.Ctx, deploymentName, testNamespace, 2*time.Minute)
+			Expect(err).NotTo(HaveOccurred())
+
+			soName := "cma-nocpu-so"
+			By("Creating ScaledObject with CPU trigger — should be rejected")
+			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
+				Name:           soName,
+				Namespace:      testNamespace,
+				DeploymentName: deploymentName,
+				MaxReplicas:    5,
+				Triggers: []framework.ScaledObjectTrigger{{
+					Type:       "cpu",
+					MetricType: "Utilization",
+					Metadata: map[string]string{
+						"value": "50",
+					},
+				}},
+			})
+			Expect(err).To(HaveOccurred(), "ScaledObject with CPU trigger should be rejected when deployment has no CPU requests")
+			GinkgoWriter.Printf("[Test] Correctly rejected CPU ScaledObject without CPU requests: %v\n", err)
+		})
+	})
 })
+
+func int64Ptr(v int64) *int64 { return &v }
