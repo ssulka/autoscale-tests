@@ -161,7 +161,7 @@ test-e2e-hpa: ## Run HPA E2E tests
 
 .PHONY: test-e2e-cas
 test-e2e-cas: ## Run Cluster Autoscaler E2E tests
-	go test -v -timeout 30m ./test/e2e/cas/... -args -ginkgo.v $(GINKGO_FLAGS)
+	make -C cas test-e2e
 
 .PHONY: test-e2e-cro
 test-e2e-cro: ## Run CRO E2E tests
