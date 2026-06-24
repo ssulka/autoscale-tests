@@ -1,0 +1,53 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - copyloopvar
+    - dupword
+    - errcheck
+    - ginkgolinter
+    - gocritic
+    - govet
+    - ineffassign
+    - misspell
+    - revive
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+  settings:
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: dot-imports
+          arguments:
+            - allowedPackages:
+                - "github.com/onsi/ginkgo/v2"
+                - "github.com/onsi/gomega"
+        - name: error-return
+        - name: error-strings
+        - name: increment-decrement
+        - name: var-declaration
+        - name: range
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/openshift/autoscale-tests
+
+output:
+  formats:
+    text:
+      path: stdout
+  sort-order:
+    - linter
+    - file
+
+issues:
+  max-same-issues: 0

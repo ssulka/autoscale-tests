@@ -66,8 +66,7 @@ var _ = Describe("Cluster Resource Override Operator", func() {
 		It("should have running operator pods", func() {
 			pods, err := f.GetOperatorPods(f.Ctx, "cro")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(pods.Items)).To(BeNumerically(">", 0),
-				"Should have at least one CRO operator pod in namespace %s", framework.CRONamespace)
+			Expect(pods.Items).ToNot(BeEmpty(), "Should have at least one CRO operator pod in namespace %s", framework.CRONamespace)
 
 			By("Listing found pods")
 			for _, pod := range pods.Items {
@@ -373,7 +372,7 @@ var _ = Describe("Cluster Resource Override Operator", func() {
 				container.Resources.Requests.Memory().String(), container.Resources.Limits.Memory().String())
 
 			By("Verifying pod got limits from LimitRange (memory limit should be 512Mi)")
-			Expect(container.Resources.Limits.Memory().Value()).To(Equal(int64(512 * 1024 * 1024)),
+			Expect(container.Resources.Limits.Memory().Value()).To(Equal(int64(512*1024*1024)),
 				"Memory limit should come from LimitRange default")
 
 			By("Verifying CRO reduced CPU limit from the LimitRange default of 2000m")

@@ -77,8 +77,7 @@ var _ = Describe("VPA (Vertical Pod Autoscaler)", func() {
 		It("should have running operator pods", func() {
 			pods, err := f.GetOperatorPods(f.Ctx, "vpa")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(pods.Items)).To(BeNumerically(">", 0),
-				"Should have at least one VPA operator pod in namespace %s", framework.VPANamespace)
+			Expect(pods.Items).ToNot(BeEmpty(), "Should have at least one VPA operator pod in namespace %s", framework.VPANamespace)
 
 			By("Listing found pods")
 			for _, pod := range pods.Items {
@@ -170,7 +169,7 @@ var _ = Describe("VPA (Vertical Pod Autoscaler)", func() {
 
 			recs, err := f.GetVPARecommendations(f.Ctx, vpaName, testNamespace)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(recs)).To(BeNumerically(">=", 1))
+			Expect(recs).ToNot(BeEmpty())
 			GinkgoWriter.Printf("[Test] Recommendation: %+v\n", recs[0])
 
 			Expect(recs[0].Target).To(HaveKey("cpu"), "Recommendation should include CPU target")
@@ -234,7 +233,7 @@ var _ = Describe("VPA (Vertical Pod Autoscaler)", func() {
 
 			recs, err := f.GetVPARecommendations(f.Ctx, vpaName, testNamespace)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(recs)).To(BeNumerically(">=", 1))
+			Expect(recs).ToNot(BeEmpty())
 
 			targetCPU := resource.MustParse(recs[0].Target["cpu"])
 			minCPU := resource.MustParse("500m")
@@ -301,7 +300,7 @@ var _ = Describe("VPA (Vertical Pod Autoscaler)", func() {
 
 			recs, err := f.GetVPARecommendations(f.Ctx, vpaName, testNamespace)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(recs)).To(BeNumerically(">=", 1))
+			Expect(recs).ToNot(BeEmpty())
 
 			targetCPU := resource.MustParse(recs[0].Target["cpu"])
 			maxCPU := resource.MustParse("200m")
@@ -468,7 +467,7 @@ var _ = Describe("VPA (Vertical Pod Autoscaler)", func() {
 			By("Checking pod requests were mutated by VPA admission")
 			pods, err := f.ListPods(f.Ctx, testNamespace, map[string]string{"app": deploymentName})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(pods.Items)).To(BeNumerically(">=", 1))
+			Expect(pods.Items).ToNot(BeEmpty())
 
 			By("Checking VPA annotations on pod (confirms webhook processed it)")
 			GinkgoWriter.Printf("[Test] Pod annotations: %v\n", pods.Items[0].Annotations)
@@ -539,7 +538,7 @@ var _ = Describe("VPA (Vertical Pod Autoscaler)", func() {
 
 			pods, err := f.ListPods(f.Ctx, testNamespace, map[string]string{"app": deploymentName})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(pods.Items)).To(BeNumerically(">=", 1))
+			Expect(pods.Items).ToNot(BeEmpty())
 
 			container := pods.Items[0].Spec.Containers[0]
 			cpuReq := container.Resources.Requests[corev1.ResourceCPU]
@@ -617,7 +616,7 @@ var _ = Describe("VPA (Vertical Pod Autoscaler)", func() {
 
 			pods, err := f.ListPods(f.Ctx, testNamespace, map[string]string{"app": deploymentName})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(pods.Items)).To(BeNumerically(">=", 1))
+			Expect(pods.Items).ToNot(BeEmpty())
 
 			container := pods.Items[0].Spec.Containers[0]
 			cpuReq := container.Resources.Requests[corev1.ResourceCPU]
@@ -690,7 +689,7 @@ var _ = Describe("VPA (Vertical Pod Autoscaler)", func() {
 
 			pods, err := f.ListPods(f.Ctx, testNamespace, map[string]string{"app": deploymentName})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(pods.Items)).To(BeNumerically(">=", 1))
+			Expect(pods.Items).ToNot(BeEmpty())
 
 			By("Checking VPA annotations on pod (confirms webhook processed it)")
 			annotations := pods.Items[0].Annotations
@@ -751,7 +750,7 @@ var _ = Describe("VPA (Vertical Pod Autoscaler)", func() {
 			By("Verifying pod requests remain unchanged")
 			pods, err := f.ListPods(f.Ctx, testNamespace, map[string]string{"app": deploymentName})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(pods.Items)).To(BeNumerically(">=", 1))
+			Expect(pods.Items).ToNot(BeEmpty())
 
 			container := pods.Items[0].Spec.Containers[0]
 			cpuReq := container.Resources.Requests[corev1.ResourceCPU]
@@ -874,7 +873,3 @@ var _ = Describe("VPA (Vertical Pod Autoscaler)", func() {
 		})
 	})
 })
-
-func isPodRunning(pod *corev1.Pod) bool {
-	return pod.Status.Phase == corev1.PodRunning
-}

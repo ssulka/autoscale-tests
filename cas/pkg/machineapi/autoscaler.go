@@ -25,9 +25,10 @@ import (
 	caov1beta1 "github.com/openshift/cluster-autoscaler-operator/pkg/apis/autoscaling/v1beta1"
 	"sigs.k8s.io/controller-runtime/pkg/envtest/komega"
 
+	corev1resourcebuilder "github.com/openshift/cluster-api-actuator-pkg/testutils/resourcebuilder/core/v1"
+
 	"github.com/openshift/autoscale-tests/cas/pkg/framework"
 	"github.com/openshift/autoscale-tests/cas/pkg/framework/gatherer"
-	corev1resourcebuilder "github.com/openshift/cluster-api-actuator-pkg/testutils/resourcebuilder/core/v1"
 )
 
 const (

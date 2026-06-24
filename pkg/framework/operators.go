@@ -55,15 +55,6 @@ func (f *Framework) InstallOperator(ctx context.Context, opts OperatorInstallOpt
 	return nil
 }
 
-func (f *Framework) ensureOperatorGroup(ctx context.Context, namespace string) error {
-	return f.ensureOperatorGroupWithMode(ctx, namespace, false)
-}
-
-// ensureOperatorGroupAllNamespaces creates an OperatorGroup that watches all namespaces
-func (f *Framework) ensureOperatorGroupAllNamespaces(ctx context.Context, namespace string) error {
-	return f.ensureOperatorGroupWithMode(ctx, namespace, true)
-}
-
 func (f *Framework) ensureOperatorGroupWithMode(ctx context.Context, namespace string, allNamespaces bool) error {
 	ogList := &unstructured.UnstructuredList{}
 	ogList.SetGroupVersionKind(schema.GroupVersionKind{Group: "operators.coreos.com", Version: "v1", Kind: "OperatorGroupList"})
@@ -172,14 +163,14 @@ const (
 
 // OperatorInfo contains information about an operator
 type OperatorInfo struct {
-	Name            string
-	Namespace       string            // Namespace where subscription is created
-	PodsNamespace   string            // Namespace where operator pods run (if different)
-	Labels          map[string]string
-	PackageName     string // OLM package name for installation
-	CatalogSource   string // Catalog source (e.g., "redhat-operators")
-	Channel         string // Channel (e.g., "stable")
-	AllNamespaces   bool   // If true, OperatorGroup watches all namespaces
+	Name          string
+	Namespace     string // Namespace where subscription is created
+	PodsNamespace string // Namespace where operator pods run (if different)
+	Labels        map[string]string
+	PackageName   string // OLM package name for installation
+	CatalogSource string // Catalog source (e.g., "redhat-operators")
+	Channel       string // Channel (e.g., "stable")
+	AllNamespaces bool   // If true, OperatorGroup watches all namespaces
 }
 
 var Operators = map[string]OperatorInfo{

@@ -67,8 +67,7 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 		It("should have the CMA operator pod running", func() {
 			pods, err := f.GetOperatorPods(f.Ctx, "cma")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(pods.Items)).To(BeNumerically(">", 0),
-				"Should have at least one CMA operator pod in namespace %s", framework.CMANamespace)
+			Expect(pods.Items).ToNot(BeEmpty(), "Should have at least one CMA operator pod in namespace %s", framework.CMANamespace)
 
 			GinkgoWriter.Printf("[Test] CMA operator pods (%d):\n", len(pods.Items))
 			for _, pod := range pods.Items {
@@ -191,13 +190,13 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 			By(fmt.Sprintf("Creating ScaledObject with cron trigger (start=%d, end=%d UTC minutes)", startMin, endMin))
 			soName := "cma-cron-so"
 			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
-				Name:           soName,
-				Namespace:      testNamespace,
-				DeploymentName: deploymentName,
-				MinReplicas:    int64Ptr(1),
-				MaxReplicas:    10,
-				PollingInterval: int64Ptr(5),
-				CooldownPeriod:  int64Ptr(5),
+				Name:                          soName,
+				Namespace:                     testNamespace,
+				DeploymentName:                deploymentName,
+				MinReplicas:                   int64Ptr(1),
+				MaxReplicas:                   10,
+				PollingInterval:               int64Ptr(5),
+				CooldownPeriod:                int64Ptr(5),
 				ScaleDownStabilizationSeconds: int64Ptr(15),
 				Triggers: []framework.ScaledObjectTrigger{{
 					Type: "cron",
@@ -268,11 +267,11 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 			soName := "cma-cpu-so"
 			By("Creating ScaledObject with CPU trigger (50% utilization)")
 			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
-				Name:           soName,
-				Namespace:      testNamespace,
-				DeploymentName: deploymentName,
-				MinReplicas:    int64Ptr(1),
-				MaxReplicas:    5,
+				Name:                          soName,
+				Namespace:                     testNamespace,
+				DeploymentName:                deploymentName,
+				MinReplicas:                   int64Ptr(1),
+				MaxReplicas:                   5,
 				ScaleDownStabilizationSeconds: int64Ptr(0),
 				CooldownPeriod:                int64Ptr(30),
 				Triggers: []framework.ScaledObjectTrigger{{
@@ -349,11 +348,11 @@ var _ = Describe("Custom Metrics Autoscaler Operator", func() {
 			soName := "cma-mem-so"
 			By("Creating ScaledObject with memory trigger (50% utilization)")
 			err = f.CreateScaledObject(f.Ctx, framework.ScaledObjectConfig{
-				Name:           soName,
-				Namespace:      testNamespace,
-				DeploymentName: deploymentName,
-				MinReplicas:    int64Ptr(1),
-				MaxReplicas:    5,
+				Name:                          soName,
+				Namespace:                     testNamespace,
+				DeploymentName:                deploymentName,
+				MinReplicas:                   int64Ptr(1),
+				MaxReplicas:                   5,
 				ScaleDownStabilizationSeconds: int64Ptr(0),
 				CooldownPeriod:                int64Ptr(30),
 				Triggers: []framework.ScaledObjectTrigger{{

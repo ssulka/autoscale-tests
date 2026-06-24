@@ -41,21 +41,21 @@ const (
 
 // VPAContainerPolicy defines per-container resource policy for a VPA
 type VPAContainerPolicy struct {
-	ContainerName string
-	MinAllowed    map[string]string // e.g. {"cpu": "100m", "memory": "64Mi"}
-	MaxAllowed    map[string]string
-	Mode          string // "Auto" or "Off" (ContainerScalingMode)
+	ContainerName    string
+	MinAllowed       map[string]string // e.g. {"cpu": "100m", "memory": "64Mi"}
+	MaxAllowed       map[string]string
+	Mode             string // "Auto" or "Off" (ContainerScalingMode)
 	ControlledValues string // "RequestsAndLimits" or "RequestsOnly"
 }
 
 // VPAConfig holds parameters for creating a VerticalPodAutoscaler
 type VPAConfig struct {
-	Name             string
-	Namespace        string
-	TargetDeployment string
-	UpdateMode       VPAUpdateMode
-	MinAllowed       map[string]string // global min
-	MaxAllowed       map[string]string // global max
+	Name              string
+	Namespace         string
+	TargetDeployment  string
+	UpdateMode        VPAUpdateMode
+	MinAllowed        map[string]string // global min
+	MaxAllowed        map[string]string // global max
 	ContainerPolicies []VPAContainerPolicy
 }
 
@@ -252,10 +252,10 @@ func (f *Framework) DeleteVPA(ctx context.Context, name, namespace string) error
 
 // VPARecommendation holds parsed recommendation values for a single container
 type VPARecommendation struct {
-	ContainerName string
-	Target        map[string]string // e.g. {"cpu": "250m", "memory": "200Mi"}
-	LowerBound    map[string]string
-	UpperBound    map[string]string
+	ContainerName  string
+	Target         map[string]string // e.g. {"cpu": "250m", "memory": "200Mi"}
+	LowerBound     map[string]string
+	UpperBound     map[string]string
 	UncappedTarget map[string]string
 }
 

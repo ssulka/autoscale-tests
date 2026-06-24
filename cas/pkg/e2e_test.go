@@ -12,10 +12,11 @@ import (
 
 	osconfigv1 "github.com/openshift/api/config/v1"
 	machinev1 "github.com/openshift/api/machine/v1beta1"
-	"github.com/openshift/autoscale-tests/cas/pkg/framework"
 	caov1alpha1 "github.com/openshift/cluster-autoscaler-operator/pkg/apis"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	"github.com/openshift/autoscale-tests/cas/pkg/framework"
 
 	_ "github.com/openshift/autoscale-tests/cas/pkg/machineapi"
 )

@@ -18,7 +18,7 @@ import (
 const (
 	ResourceConsumerImage = "registry.k8s.io/e2e-test-images/resource-consumer:1.13"
 
-	resourceConsumerPort       = 8080
+	resourceConsumerPort        = 8080
 	resourceConsumerServicePort = 80
 
 	consumptionDurationSec = 30
@@ -35,15 +35,15 @@ const (
 
 // ResourceConsumerConfig holds all parameters for deploying a resource-consumer workload.
 type ResourceConsumerConfig struct {
-	Name          string
-	Namespace     string
-	Replicas      int32
-	CPURequest    int64 // millicores
-	MemRequest    int64 // megabytes 
-	MemLimit      int64 // megabytes 
-	InitCPUTotal  int   // millicores — initial CPU consumption across all pods
-	InitMemTotal  int   // megabytes — initial memory consumption across all pods
-	Sidecar       SidecarMode
+	Name         string
+	Namespace    string
+	Replicas     int32
+	CPURequest   int64 // millicores
+	MemRequest   int64 // megabytes
+	MemLimit     int64 // megabytes
+	InitCPUTotal int   // millicores — initial CPU consumption across all pods
+	InitMemTotal int   // megabytes — initial memory consumption across all pods
+	Sidecar      SidecarMode
 }
 
 type ResourceConsumer struct {
@@ -75,9 +75,9 @@ func (f *Framework) CreateResourceConsumer(ctx context.Context, cfg ResourceCons
 	}
 
 	containers := []corev1.Container{{
-		Name:    cfg.Name,
-		Image:   ResourceConsumerImage,
-		Ports:   []corev1.ContainerPort{{ContainerPort: resourceConsumerPort}},
+		Name:  cfg.Name,
+		Image: ResourceConsumerImage,
+		Ports: []corev1.ContainerPort{{ContainerPort: resourceConsumerPort}},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    *resource.NewMilliQuantity(cfg.CPURequest, resource.DecimalSI),

@@ -10,7 +10,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/dynamic"
 )
 
 var scaledObjectGVR = schema.GroupVersionResource{
@@ -28,14 +27,14 @@ type ScaledObjectTrigger struct {
 
 // ScaledObjectConfig holds parameters for creating a ScaledObject.
 type ScaledObjectConfig struct {
-	Name             string
-	Namespace        string
-	DeploymentName   string
-	MinReplicas      *int64 // nil = KEDA default (0 for scale-to-zero)
-	MaxReplicas      int64
-	PollingInterval  *int64 // seconds between trigger checks (nil = KEDA default 30s)
-	CooldownPeriod   *int64 // seconds after last trigger before scaling to minReplicas (nil = KEDA default 300s)
-	Triggers         []ScaledObjectTrigger
+	Name            string
+	Namespace       string
+	DeploymentName  string
+	MinReplicas     *int64 // nil = KEDA default (0 for scale-to-zero)
+	MaxReplicas     int64
+	PollingInterval *int64 // seconds between trigger checks (nil = KEDA default 30s)
+	CooldownPeriod  *int64 // seconds after last trigger before scaling to minReplicas (nil = KEDA default 300s)
+	Triggers        []ScaledObjectTrigger
 
 	// HPA behavior overrides (optional)
 	ScaleDownStabilizationSeconds *int64
@@ -241,11 +240,6 @@ func (f *Framework) WaitForKEDAExactReplicas(ctx context.Context, deploymentName
 		fmt.Printf("[KEDA] %s: readyReplicas=%d, waiting for ==%d\n", deploymentName, current, replicas)
 		return current == replicas, nil
 	})
-}
-
-// getDynamicClient returns a dynamic Kubernetes client for working with unstructured resources.
-func (f *Framework) getDynamicClient() dynamic.Interface {
-	return dynamic.NewForConfigOrDie(f.RestConfig)
 }
 
 // toStringInterfaceMap converts map[string]string to map[string]interface{} for unstructured objects.

@@ -23,8 +23,8 @@ import (
 	rt "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -101,9 +101,8 @@ func getNamespace() string {
 	return "default"
 }
 
-func (f *Framework) WithTimeout(timeout time.Duration) context.Context {
-	ctx, _ := context.WithTimeout(f.Ctx, timeout)
-	return ctx
+func (f *Framework) WithTimeout(timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(f.Ctx, timeout)
 }
 
 // Pod Helpers
@@ -178,7 +177,7 @@ func (f *Framework) GetPodLogs(ctx context.Context, namespace, podName, containe
 	if err != nil {
 		return "", err
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	buf := new(bytes.Buffer)
 	_, err = io.Copy(buf, stream)
 	return buf.String(), err
@@ -263,17 +262,17 @@ type ContainerConfig struct {
 }
 
 type DeploymentConfig struct {
-	Name              string
-	Namespace         string
-	Replicas          int32
-	Image             string
-	Command           []string
-	CPURequest        string
-	MemoryRequest     string
-	CPULimit          string
-	MemoryLimit       string
-	Labels            map[string]string
-	ExtraContainers   []ContainerConfig
+	Name            string
+	Namespace       string
+	Replicas        int32
+	Image           string
+	Command         []string
+	CPURequest      string
+	MemoryRequest   string
+	CPULimit        string
+	MemoryLimit     string
+	Labels          map[string]string
+	ExtraContainers []ContainerConfig
 }
 
 func DefaultDeploymentConfig(name, namespace string) DeploymentConfig {
@@ -377,22 +376,22 @@ func (f *Framework) WaitForDeploymentReplicas(ctx context.Context, name, namespa
 // HPA Helpers
 
 type HPAConfig struct {
-	Name                              string
-	Namespace                         string
-	TargetDeployment                  string
-	MinReplicas                       int32
-	MaxReplicas                       int32
-	CPUTargetUtilization              *int32
-	CPUAverageValue                   string
-	MemoryTargetUtilization           *int32
-	MemoryAverageValue                string
+	Name                    string
+	Namespace               string
+	TargetDeployment        string
+	MinReplicas             int32
+	MaxReplicas             int32
+	CPUTargetUtilization    *int32
+	CPUAverageValue         string
+	MemoryTargetUtilization *int32
+	MemoryAverageValue      string
 	// ContainerResource metrics (targets a specific container by name)
-	ContainerName                     string
-	ContainerCPUTargetUtilization     *int32
-	ContainerCPUAverageValue          string
-	ContainerMemoryTargetUtilization  *int32
-	ContainerMemoryAverageValue       string
-	ScaleDownStabilizationWindowSecs  *int32
+	ContainerName                    string
+	ContainerCPUTargetUtilization    *int32
+	ContainerCPUAverageValue         string
+	ContainerMemoryTargetUtilization *int32
+	ContainerMemoryAverageValue      string
+	ScaleDownStabilizationWindowSecs *int32
 }
 
 func DefaultHPAConfig(name, namespace, targetDeployment string) HPAConfig {
